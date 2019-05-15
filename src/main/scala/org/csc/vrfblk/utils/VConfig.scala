@@ -43,6 +43,8 @@ object VConfig {
   val SYNCBLK_PAGE_SIZE = prop.get(PROP_DOMAIN + "syncblk.page.size", 10);
 
   val SYNC_TX_SLEEP_MS = prop.get(PROP_DOMAIN + "synctx.sleep.ms", 0);
+  
+  val SYNC_TX_SLEEP_MAX_MS = prop.get(PROP_DOMAIN + "synctx.sleep.max.ms", 3000);
 
   //Term投票的比例
   val VOTE_QUORUM_RATIO = prop.get(PROP_DOMAIN + "vote.quorum.ratio", 60); //60%
@@ -94,6 +96,8 @@ object VConfig {
 
   //城为挖矿节点，需要追上当前全网高度的差距
   val BLOCK_DISTANCE_COMINE = prop.get(PROP_DOMAIN + "block.distance.comine", 5);
+
+  val BLOCK_DISTANCE_NETBITS = prop.get(PROP_DOMAIN + "block.distance.netbits", 2);
 
   //term投票被否决是最少等待时间，sleep = random(BAN_MINSEC_FOR_VOTE_REJECT,BAN_MAXSEC_FOR_VOTE_REJECT)
   val BAN_MINSEC_FOR_VOTE_REJECT = prop.get(PROP_DOMAIN + "ban.minsec.for.vote.reject", 10);
@@ -153,7 +157,7 @@ object VConfig {
   val SYNC_TX_TPS_LIMIT = prop.get(PROP_DOMAIN + "sync.tx.tps.limit", 50000); //每秒钟最多1万笔交易同步
 
   //当有交易时，低于这个值，则不做立即打块请求，需要sleep一段时间，介于【WAIT_BLOCK_MIN_TXN，WAIT_BLOCK_MAX_TXN】之间，则需要等待BLK_MIN_EPOCH_MS时间
-  val WAIT_BLOCK_MIN_TXN = prop.get(PROP_DOMAIN + "wait.block.min.txn", 100); //至少100笔以上就不等了
+  val WAIT_BLOCK_MIN_TXN = prop.get(PROP_DOMAIN + "wait.block.min.txn", 500); //至少100笔以上就不等了
 
   //当有交易时，大于这个值，则立即打块，不sleep，介于【WAIT_BLOCK_MIN_TXN，WAIT_BLOCK_MAX_TXN】之间，则需要等待BLK_MIN_EPOCH_MS时间
   val WAIT_BLOCK_MAX_TXN = prop.get(PROP_DOMAIN + "wait.block.max.txn", 5000); //超过5000笔以上就不等了
@@ -173,6 +177,9 @@ object VConfig {
 
   //同步交易时，在本地的缓存，给其他节点调用
   val TX_MAX_CACHE_SIZE = prop.get(PROP_DOMAIN + "tx.max.cache.size", 300000); //80%
+  val TX_WALL_MAX_CACHE_SIZE = prop.get(PROP_DOMAIN + "tx.wall.max.cache.size", 300000); //80%
+  val TX_CONFIRM_MAX_CACHE_SIZE = prop.get(PROP_DOMAIN + "tx.confirm.max.cache.size", 300000); //80%
+  
 
   //连续打块不sleep的次数限制
   val DCTRL_CONTINUE_LOOP_COUNT = prop.get(PROP_DOMAIN + "dctrl.continue.loop.count", 3); //80%

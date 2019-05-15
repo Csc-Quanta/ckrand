@@ -28,6 +28,8 @@ import org.csc.vrfblk.tasks.Initialize
 import org.csc.vrfblk.Daos
 import org.csc.vrfblk.tasks.BeaconGossip
 import org.apache.commons.lang3.StringUtils
+import org.csc.ckrand.pbgens.Ckrand.VNodeState
+import org.csc.vrfblk.utils.VConfig
 
 @NActorProvider
 @Instantiate
@@ -44,7 +46,7 @@ object PSCoinbaseNewService extends LogHelper with PBUtils with LService[PSCoinb
     if (!VCtrl.isReady()) {
       log.debug("VCtrl not ready:");
       handler.onFinished(PacketHelper.toPBReturn(pack, pbo))
-      NodeStateSwitcher.offerMessage(new Initialize());
+      // NodeStateSwitcher.offerMessage(new Initialize());
     } else {
       MDCSetBCUID(VCtrl.network())
       MDCSetMessageID(pbo.getMessageId)
@@ -54,7 +56,14 @@ object PSCoinbaseNewService extends LogHelper with PBUtils with LService[PSCoinb
       val parentBlock = Daos.blkHelper.getBlock(Daos.enc.hexEnc(block.getHeader.getPreHash.toByteArray()));
       if (parentBlock == null) {
         log.warn("not found parent block:: bh=" + Daos.enc.hexEnc(block.getHeader.getHash.toByteArray()) + " height=" + block.getHeader.getNumber)
-        BlockProcessor.offerMessage(new ApplyBlock(pbo));
+        if (VCtrl.curVN().getState != VNodeState.VN_INIT
+          && VCtrl.curVN().getState != VNodeState.VN_SYNC_BLOCK
+          && VCtrl.curVN().getCurBlock + VConfig.MAX_SYNC_BLOCKS > pbo.getBlockHeight ) {
+          BlockProcessor.offerBlock(new ApplyBlock(pbo)); //need to sync or gossip
+        }else{
+          
+        }
+
       } else {
         val nodebits = parentBlock.getMiner.getBit;
         val (hash, sign) = RandFunction.genRandHash(Daos.enc.hexEnc(block.getHeader.getPreHash.toByteArray()), parentBlock.getMiner.getTermid, nodebits);
@@ -68,11 +77,11 @@ object PSCoinbaseNewService extends LogHelper with PBUtils with LService[PSCoinb
               log.info("rollback hash apply:rollbackhash=" + rollbackhash + ",blockheight=" + pbo.getBlockHeight);
               BlockProcessor.offerMessage(new ApplyBlock(pbo));
             } else {
-              log.warn("beaconhash.rollback not equal:height="+block.getHeader.getNumber+":: BH=" + pbo.getBlockEntry.getBlockhash
-                  + " prvbh=" + Daos.enc.hexEnc(block.getHeader.getPreHash.toByteArray())+" dbprevbh="+Daos.enc.hexEnc(parentBlock.getHeader.getHash.toByteArray())
-                  + " termid=" + block.getMiner.getTermid + " ptermid=" + parentBlock.getMiner.getTermid
-                  + " need=" + rollbackhash + " get=" + pbo.getBeaconHash
-                  + " prevBeaconHash=" + pbo.getPrevBeaconHash + " BeaconBits=" + nodebits
+              log.warn("beaconhash.rollback not equal:height=" + block.getHeader.getNumber + ":: BH=" + pbo.getBlockEntry.getBlockhash
+                + " prvbh=" + Daos.enc.hexEnc(block.getHeader.getPreHash.toByteArray()) + " dbprevbh=" + Daos.enc.hexEnc(parentBlock.getHeader.getHash.toByteArray())
+                + " termid=" + block.getMiner.getTermid + " ptermid=" + parentBlock.getMiner.getTermid
+                + " need=" + rollbackhash + " get=" + pbo.getBeaconHash
+                + " prevBeaconHash=" + pbo.getPrevBeaconHash + " BeaconBits=" + nodebits
                 + ",rollbackseed=" + BeaconGossip.rollbackGossipNetBits)
             }
           } else {

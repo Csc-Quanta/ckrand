@@ -30,42 +30,64 @@ class PSBlockSync extends PSMVRFNet[PSSyncBlocks] {
   override def service = PSBlockSyncService
 }
 
-//
-// http://localhost:8000/fbs/xdn/pbget.do?bd=
+/**
+  * 请求同步块
+  */
 object PSBlockSyncService extends LogHelper with PBUtils with LService[PSSyncBlocks] with PMNodeHelper {
   override def onPBPacket(pack: FramePacket, pbo: PSSyncBlocks, handler: CompleteHandler) = {
-    //    log.debug("BlockSyncService:" + pack.getFrom())
-    var ret = PRetSyncBlocks.newBuilder();
+    val ret = PRetSyncBlocks.newBuilder();
     if (!VCtrl.isReady()) {
       ret.setRetCode(-1).setRetMessage("VRF Network Not READY")
       handler.onFinished(PacketHelper.toPBReturn(pack, ret.build()))
     } else {
       try {
-        val startTime = System.currentTimeMillis();
         MDCSetBCUID(VCtrl.network())
         MDCSetMessageID(pbo.getMessageId)
         ret.setMessageId(pbo.getMessageId);
-        //
-        val cn = VCtrl.curVN()
         ret.setRetCode(0).setRetMessage("SUCCESS")
+        //同步块总大小(K)
+        var totalSize = 0
+        //同步block总共40M
+        val maxTotalSize = 100 * 1024 * 1024
+
         for (
-          id <- pbo.getStartId to pbo.getEndId
+          id <- pbo.getStartId to pbo.getEndId if totalSize <= maxTotalSize
         ) {
-          val b = VCtrl.loadFromBlock(id, pbo.getNeedBody);
+          val b = VCtrl.loadFromBlock(id, pbo.getNeedBody)
           if (b != null) {
-            b.map(bs => {
-              if (bs !=null) {
-                ret.addBlockHeaders(bs);
-              }
-            })
+              b.map(bs => {
+                if (bs !=null && totalSize <= maxTotalSize) {
+                  totalSize = totalSize + bs.build().toByteArray().size;
+                  if (totalSize <= maxTotalSize) {
+                    ret.addBlockHeaders(bs);
+                  } else {
+                    log.info("package too large. size=" + totalSize + " blk=" + id)
+                  } 
+                }
+              })
           }
         }
         pbo.getBlockIdxList.map { id =>
-          val b = VCtrl.loadFromBlock(id);
+          val b = VCtrl.loadFromBlock(id, pbo.getNeedBody);
           if (b != null) {
             b.map(bs => {
-              ret.addBlockHeaders(bs);
+              totalSize = totalSize + bs.build().toByteArray().size;
             })
+            if (totalSize <= maxTotalSize) {
+              b.map(bs => {
+                if (bs !=null) {
+                  totalSize = totalSize + bs.build().toByteArray().size;
+                  log.info("blk=" + id + " size=" + bs.build().toByteArray().size)
+                  if (totalSize <= maxTotalSize) {
+                    ret.addBlockHeaders(bs);
+                  } else {
+                    log.info("package too large. size=" + totalSize + " blk=" + id);
+                  }
+                }
+              })
+            } else {
+              log.info("package too large. size=" + totalSize + " blk=" + id);
+            }
           }
         }
       } catch {

@@ -4,19 +4,24 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 
-import com.google.common.cache.{Cache, CacheBuilder}
+import com.google.common.cache.{ Cache, CacheBuilder }
 import org.apache.commons.lang3.StringUtils
-import org.csc.bcapi.crypto.BitMap
 import org.csc.bcapi.gens.Oentity.OValue
-import org.csc.ckrand.pbgens.Ckrand.{PBlockEntry, VNode, VNodeState}
+import org.csc.ckrand.pbgens.Ckrand.{ PBlockEntry, VNode, VNodeState }
 import org.csc.p22p.action.PMNodeHelper
-import org.csc.p22p.node.{Network, Node}
+import org.csc.p22p.node.{ Network, Node }
 import org.csc.p22p.utils.LogHelper
 import org.csc.vrfblk.Daos
-import org.csc.vrfblk.utils.{RandFunction, VConfig}
-
+import org.csc.vrfblk.utils.{ RandFunction, VConfig }
+import org.csc.evmapi.gens.Block.BlockEntity
 import scala.collection.JavaConverters._
 import scala.collection.mutable.Map
+import org.csc.evmapi.gens.Block.BlockHeader
+import com.google.protobuf.ByteString
+import org.csc.bcapi.crypto.BitMap
+import scala.collection.JavaConversions._
+import org.csc.evmapi.gens.Tx.Transaction
+import java.util.ArrayList
 
 //投票决定当前的节点
 case class VRFController(network: Network) extends PMNodeHelper with LogHelper with BitMap {
@@ -45,13 +50,12 @@ case class VRFController(network: Network) extends PMNodeHelper with LogHelper w
         cur_vnode.setBcuid(root_node.bcuid);
         syncToDB();
       } else {
-        log.info("load from db:OK:{" + cur_vnode.toString().replaceAll("\n", ", ") + "}")
+        // log.info("load from db:OK:{" + cur_vnode.toString().replaceAll("\n", ", ") + "}")
       }
     }
     if (cur_vnode.getCurBlock != Daos.chainHelper.getLastBlockNumber.intValue()) {
-      log.info("vrf block Info load from DB:c=" +
-        cur_vnode.getCurBlock + " ==> a=" + Daos.chainHelper.getLastBlockNumber);
-
+      //log.info("vrf block Info load from DB:c=" +
+      //  cur_vnode.getCurBlock + " ==> a=" + Daos.chainHelper.getLastBlockNumber);
 
       if (Daos.chainHelper.getLastBlockNumber.intValue() == 0) {
         cur_vnode.setCurBlock(Daos.chainHelper.getLastBlockNumber.intValue())
@@ -82,35 +86,21 @@ case class VRFController(network: Network) extends PMNodeHelper with LogHelper w
       OValue.newBuilder().setExtdata(cur_vnode.build().toByteString()).build())
   }
 
-  def updateBlockHeight(blockHeight: Int, blockHash: String, extraData: String) = {
+  def updateBlockHeight(block: BlockEntity): Unit = {
+    updateBlockHeight(block.getHeader.getNumber.intValue, Daos.enc.hexEnc(block.getHeader.getHash.toByteArray()), block.getMiner.getTermid, block.getMiner.getBit, block.getHeader.getTimestamp)
+  }
 
-    //if (blockHeight != cur_vnode.getCurBlock || (blockHeight == cur_vnode.getCurBlock && !blockHash.equals(cur_vnode.getCurBlockHash))) {
-
-    log.debug("updateBlockHeight blockHeight=" + blockHeight + " blockHash=" + blockHash + " bits=" + extraData)
+  def updateBlockHeight(blockHeight: Int, blockHash: String, beaconHash: String, bits: String, blockTime: Long): Unit = {
     Daos.blkHelper.synchronized({
       cur_vnode.setCurBlockRecvTime(System.currentTimeMillis())
-      cur_vnode.setCurBlockMakeTime(System.currentTimeMillis())
-      val blk = Daos.blkHelper.getBlock(blockHash);
-      if (blk.getHeader.getNumber.intValue() == blockHeight) {
-        if (blockHeight == cur_vnode.getCurBlock + 1) {
-          cur_vnode.setPrevBlockHash(cur_vnode.getCurBlockHash);
-        }
-        cur_vnode.setCurBlock(blk.getHeader.getNumber.intValue())
-        //        cur_vnode.setCurBlock(blockHeight)
-        cur_vnode.setVrfRandseeds(blk.getMiner.getBit);
-        if (blockHash != null) {
-          cur_vnode.setCurBlockHash(blockHash)
+      cur_vnode.setCurBlockMakeTime(blockTime)
+      cur_vnode.setCurBlock(blockHeight);
+      cur_vnode.setCurBlockHash(blockHash)
+      cur_vnode.setBeaconHash(beaconHash);
+      cur_vnode.setVrfRandseeds(bits);
 
-          // beaconhash = blockMiner.termId
-          // cur_vnode.setBeaconHash(blockHash);
-          cur_vnode.setBeaconHash(blk.getMiner.getTermid);
-        }
-      }
-      log.debug("checkMiner --> cur_vnode.setCurBlock::" + cur_vnode.getCurBlock
-        + ",hash=" + blockHash + ",seed=" + extraData);
       syncToDB()
     })
-    //}
   }
 
   def startup() = {
@@ -121,7 +111,7 @@ case class VRFController(network: Network) extends PMNodeHelper with LogHelper w
 
 }
 
-object VCtrl extends LogHelper {
+object VCtrl extends LogHelper with BitMap {
   var instance: VRFController = VRFController(null);
 
   def network(): Network = instance.network;
@@ -167,6 +157,38 @@ object VCtrl extends LogHelper {
     loadFromBlock(block, false)
   }
 
+  // 判断这个block是否是当前beacon中的第一个块
+  def getPriorityBlockInBeaconHash(blk: BlockEntity): BlockEntity = {
+    // 如果已经有更高的高度了，直接返回最高块
+    // 如果相同高度的区块只有1个，返回true
+    val bestblks = Daos.chainHelper.getConnectBlocksByNumber(blk.getHeader.getNumber);
+    if (bestblks.size == 1) {
+      log.info("ready to update blk=" + blk.getHeader.getNumber + " hash=" + Daos.enc.hexEnc(blk.getHeader.getHash.toByteArray()) + " beacon=" + blk.getMiner.getTermid)
+      blk
+    } else {
+      // 判断是否是beaconhash中更高优先级的块
+      // 循环所有相同高度的块，排序sleepMS
+      val priorityBlk = bestblks.map(p => {
+        val prevBlock = Daos.chainHelper.getBlockByHash(blk.getHeader.getPreHash);
+        val blknode = instance.network.nodeByBcuid(prevBlock.getMiner.getBcuid);
+
+        var sleepMS =  10l
+        if(blk.getHeader.getNumber>1&&StringUtils.isNotBlank(prevBlock.getMiner.getTermid))
+        try {
+         sleepMS =  RandFunction.getRandMakeBlockSleep(prevBlock.getMiner.getTermid, mapToBigInt(prevBlock.getMiner.getBit).bigInteger, blknode.node_idx)
+        } catch {
+          case t: Throwable =>
+          
+        }
+
+        (sleepMS, p)
+      }).sortBy(_._1).get(0)._2
+
+      log.info("ready to update blk=" + priorityBlk.getHeader.getNumber + " hash=" + Daos.enc.hexEnc(priorityBlk.getHeader.getHash.toByteArray()))
+      priorityBlk
+    }
+  }
+
   def loadFromBlock(block: Int, needBody: Boolean): Iterable[PBlockEntry.Builder] = {
     //    val ov = Daos.dposdb.get("D" + block).get
     //    if (ov != null) {
@@ -180,23 +202,37 @@ object VCtrl extends LogHelper {
       //      }
       val blks = Daos.chainHelper.getBlocksByNumber(block);
       if (blks != null) {
-        blks.asScala.filter(f => if (block == 0 || block < VCtrl.curVN().getCurBlock - VConfig.SYNC_SAFE_BLOCK_COUNT) {
+        blks.asScala.filter(f => if (block == 0 || 
+            block < VConfig.SYNC_SAFE_BLOCK_COUNT || block < VCtrl.curVN().getCurBlock - VConfig.SYNC_SAFE_BLOCK_COUNT) {
           //创世块安全块允许直接广播
           true
         } else {
-          // 本地block超出安全高度的是否能校验通过，只有通过的才广播
+          // 本地block超出安全高度的是否能校验通过，只有通过的才广播??
           val parentBlock = Daos.blkHelper.getBlock(Daos.enc.hexEnc(f.getHeader.getPreHash.toByteArray()));
           val nodebits = if (f.getHeader.getNumber == 1) "" else parentBlock.getMiner.getBit;
           val (hash, sign) = RandFunction.genRandHash(Daos.enc.hexEnc(f.getHeader.getPreHash.toByteArray()), parentBlock.getMiner.getTermid, nodebits);
           if (hash.equals(f.getMiner.getTermid) || f.getHeader.getNumber == 1) {
             true
           } else {
-            false
+            true;//false,,直接通过吧，brew 20190507
+            
           }
         }).map(f => {
           // 本地block是否能校验通过，只有通过的才广播
           if (needBody) {
-            val b = PBlockEntry.newBuilder().setBlockHeader(f.toBuilder().build().toByteString()).setBlockHeight(block)
+            val txbodys = f.getBody.toBuilder();
+            //如果当前body里面有完整txList, 不再需要在重新构建tx, 否则会造成txBody重复
+            if (txbodys.getTxsCount == 0 && f.getHeader.getTxHashsCount > 0) {
+              val txlist = new ArrayList[Transaction]();
+              f.getHeader.getTxHashsList.map(txHash=>{
+                txlist.add(Daos.txHelper.GetTransaction(txHash));
+              })
+              txbodys.addAllTxs(txlist);
+            }
+             
+            val b = PBlockEntry.newBuilder().setBlockHeader(f.toBuilder().setBody(txbodys).build().toByteString()).setBlockHeight(block)
+
+            //            log.info("f.getBody.getTxsCount=" + f.getBody.getTxsCount)
             recentBlocks.put(block, b);
             b
           } else {

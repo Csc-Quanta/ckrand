@@ -44,7 +44,6 @@ object TxSync extends LogHelper {
     if (!isLimitSyncSpeed(startTime)) {
       val res = Daos.txHelper.getWaitSendTxToSend(VConfig.MAX_TNX_EACH_BROADCAST)
       if (res.getTxHashCount > 0) {
-        log.debug("Try To Synctx:Count="+res.getTxHashCount);
         val msgid = UUIDGenerator.generate();
         val syncTransaction = PSSyncTransaction.newBuilder();
         syncTransaction.setMessageid(msgid);
@@ -58,7 +57,7 @@ object TxSync extends LogHelper {
           syncTransaction.addTxDatas(x)
         }
 
-        network.wallMessage("BRTVRF", Left(syncTransaction.build()), msgid)
+        network.dwallMessage("BRTVRF", Left(syncTransaction.build()), msgid)
         lastSyncTime.set(startTime)
         lastSyncCount.set(res.getTxHashCount)
       } else {

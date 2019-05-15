@@ -2,47 +2,33 @@ package org.csc.vrfblk
 
 import java.util.concurrent.TimeUnit
 
-import org.apache.felix.ipojo.annotations.Invalidate
-import org.apache.felix.ipojo.annotations.Validate
-import org.csc.bcapi.URLHelper
-import org.csc.p22p.utils.LogHelper
-
 import com.google.protobuf.Message
-
 import onight.osgi.annotation.NActorProvider
 import onight.tfw.outils.serialize.UUIDGenerator
-import org.csc.vrfblk.utils.VConfig
-import org.csc.vrfblk.tasks.VCtrl
-import org.csc.vrfblk.tasks.VRFController
-import org.csc.vrfblk.tasks.BeaconGossip
-import org.csc.vrfblk.tasks.BlockProcessor
-import org.csc.vrfblk.tasks.NodeStateSwitcher
-import org.csc.vrfblk.tasks.BlockSync
-import org.csc.vrfblk.tasks.BeaconTask
+import org.apache.felix.ipojo.annotations.{Invalidate, Validate}
+import org.csc.bcapi.URLHelper
 import org.csc.ckrand.pbgens.Ckrand.PSNodeGraceShutDown
-import org.csc.vrfblk.tasks.TxSync
-import org.csc.vrfblk.tasks.TransactionSync
+import org.csc.p22p.utils.LogHelper
+import org.csc.vrfblk.tasks._
+import org.csc.vrfblk.utils.VConfig
 
 @NActorProvider
 class VRFStartup extends PSMVRFNet[Message] {
 
-  override def getCmds: Array[String] = Array("SSS");
+  override def getCmds: Array[String] = Array("SSS")
 
   @Validate
   def init() {
-
-    //    System.setProperty("java.protocol.handler.pkgs", "org.fc.brewchain.url");
-    log.debug("startup:");
+    // System.setProperty("java.protocol.handler.pkgs", "org.fc.brewchain.url");
+    log.info("VRF startup:")
     new Thread(new VRFBGLoader()).start()
-
-    log.debug("tasks inited....[OK]");
+    log.info("VRF initialed....[OK]")
   }
 
   @Invalidate
   def destory() {
-    //    !!DCtrl.instance.isStop = true;
+    // !!DCtrl.instance.isStop = true;
   }
-
 }
 
 class VRFBGLoader() extends Runnable with LogHelper {
@@ -62,8 +48,11 @@ class VRFBGLoader() extends Runnable with LogHelper {
       if (vrfnet != null) {
         MDCSetBCUID(vrfnet)
       }
-      log.debug("vrf ctrl not ready. vrfnet=" + vrfnet + ",ddc=" + Daos.ddc)
-      Thread.sleep(5000);
+      log.debug("vrf ctrl not ready. vrfnet=" + vrfnet
+        + ",ddc=" + Daos.ddc
+        + ",bit=" + vrfnet.node_bits().bitCount
+        + ",innetwork=" + vrfnet.inNetwork())
+      Thread.sleep(1000);
     }
     //    RSM.instance = RaftStateManager(raftnet);
 
@@ -77,7 +66,7 @@ class VRFBGLoader() extends Runnable with LogHelper {
     Daos.chainHelper.onStart(vrfnet.root().bcuid, vrfnet.root().v_address, vrfnet.root().name)
     UUIDGenerator.setJVM(vrfnet.root().bcuid.substring(1))
     vrfnet.changeNodeVAddr(naccount);
-    log.debug("vrfnet.initOK:My Node=" + vrfnet.root() + ",CoAddr=" + vrfnet.root().v_address
+    log.info("vrfnet.initOK:My Node=" + vrfnet.root() + ",CoAddr=" + vrfnet.root().v_address
       + ",vctrl.tick=" + Math.min(VConfig.TICK_DCTRL_MS, VConfig.BLK_EPOCH_MS)) // my node
 
     VCtrl.instance = VRFController(vrfnet);
@@ -95,13 +84,13 @@ class VRFBGLoader() extends Runnable with LogHelper {
 
     Runtime.getRuntime.addShutdownHook(new Thread() {
       override def run() = {
-          VCtrl.network().wallMessage("SOSVRF", Left(body), messageId, '9');
+        VCtrl.network().wallMessage("SOSVRF", Left(body), messageId, '9');
       }
     })
 
     TxSync.instance = TransactionSync(VCtrl.network());
     Daos.ddc.scheduleWithFixedDelay(TxSync.instance, VConfig.INITDELAY_GOSSIP_SEC,
-      Math.min(VConfig.TICK_DCTRL_MS_TX, VConfig.TXS_EPOCH_MS),TimeUnit.MILLISECONDS)
+      Math.min(VConfig.TICK_DCTRL_MS_TX, VConfig.TXS_EPOCH_MS), TimeUnit.MILLISECONDS)
 
     //    Scheduler.schedulerForDCtrl.scheduleWithFixedDelay(DCtrl.instance, DConfig.INITDELAY_DCTRL_SEC,
     //      Math.min(DConfig.TICK_DCTRL_MS, DConfig.BLK_EPOCH_MS), TimeUnit.MILLISECONDS)

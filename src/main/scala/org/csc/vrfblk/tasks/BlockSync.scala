@@ -32,6 +32,7 @@ import org.csc.ckrand.pbgens.Ckrand.PRetSyncBlocks
 import scala.collection.JavaConverters._
 import org.csc.evmapi.gens.Block.BlockEntity
 import org.csc.evmapi.gens.Block.BlockEntityOrBuilder
+import java.util.concurrent.atomic.AtomicLong
 
 trait SyncInfo {
   //  def proc(): Unit;
@@ -47,6 +48,9 @@ object BlockSync extends SingletonWorkShop[SyncInfo] with PMNodeHelper with BitM
     return running;
   }
 
+  val syncBlockInQueue = new AtomicLong(0);
+
+  var lastSyncBlockHeight: Int = -1;
   def runBatch(items: List[SyncInfo]): Unit = {
     MDCSetBCUID(VCtrl.network())
     items.asScala.foreach(m => {
@@ -55,14 +59,44 @@ object BlockSync extends SingletonWorkShop[SyncInfo] with PMNodeHelper with BitM
         case syncInfo: GossipRecentBlocks =>
 
         case syncInfo: SyncBlock =>
-          log.debug("syncInfo =" + syncInfo.toString().replaceAll("\n", ","));
+          log.info("syncInfo =" + syncInfo.toString().replaceAll("\n", ","));
+          if (syncBlockInQueue.get > 0) {
+            Thread.sleep(2000);
+          } else {
+            Thread.sleep(1000);
+          }
 
+          if (syncInfo.reqBody.getEndId < VCtrl.curVN().getCurBlock) {
+            return ;
+          }
+          if (lastSyncBlockHeight <= -1) {
+            lastSyncBlockHeight = syncInfo.reqBody.getStartId;
+          }
+          else if(lastSyncBlockHeight==syncInfo.reqBody.getStartId){
+            lastSyncBlockHeight =  syncInfo.reqBody.getStartId - 1; 
+          }else{
+            lastSyncBlockHeight =  0;
+          }
+
+          val reqbody =
+            if (VCtrl.curVN().getCurBlock > syncInfo.reqBody.getStartId - VConfig.SYNC_SAFE_BLOCK_COUNT) {
+              syncInfo.reqBody.toBuilder().setStartId(VCtrl.curVN().getCurBlock).build();
+            } else 
+            if(lastSyncBlockHeight>0)
+            {
+              syncInfo.reqBody.toBuilder().setStartId(lastSyncBlockHeight).build();
+            }
+            else{
+              syncInfo.reqBody
+            }
           val messageid = UUIDGenerator.generate();
           // 尝试根据bcuid确认一个节点，如果节点不存在，从网络中随机取一个
           val randn = VCtrl.ensureNode(syncInfo.fromBuid);
           val start = System.currentTimeMillis();
+
+          log.info("reqbody=" + reqbody + " randn=" + randn);
           // 请求一组block，执行applyBlock方法
-          VCtrl.network().asendMessage("SYNVRF", syncInfo.reqBody, randn,
+          VCtrl.network().asendMessage("SYNVRF", reqbody, randn,
             new CallBack[FramePacket] {
               def onSuccess(fp: FramePacket) = {
                 val end = System.currentTimeMillis();
@@ -75,19 +109,18 @@ object BlockSync extends SingletonWorkShop[SyncInfo] with PMNodeHelper with BitM
                     log.debug("send SYNVRF error:to " + randn.bcuid + ",cost=" + (end - start) + ",s=" + syncInfo.reqBody + ",ret=null")
                   } else {
                     val ret = PRetSyncBlocks.newBuilder().mergeFrom(fp.getBody);
-                    log.debug("send SYNVRF success:to " + randn.bcuid + ",cost=" + (end - start) + ",s=" + syncInfo.reqBody.getStartId + ",ret=" +
-                      ret.getRetCode + ",count=" + ret.getBlockHeadersCount)
-
-                    if (ret.getRetCode() == 0) { //same message
-
+                    if (ret.getRetCode() == 0) {
                       val realmap = ret.getBlockHeadersList.asScala; //.filter { p => p.getBlockHeight >= syncInfo.reqBody.getStartId && p.getBlockHeight <= syncInfo.reqBody.getEndId }
                       //            if (realmap.size() == endIdx - startIdx + 1) {
-                      log.debug("realBlockCount=" + realmap.size);
+                      log.info("sync realBlockCount=" + realmap.size+",req=["+reqbody.getStartId+","+reqbody.getEndId+"]");
                       realmap.foreach { b =>
                         //同步执行 apply 并验证返回结果
                         // applyblock
                         val block = BlockEntity.newBuilder().mergeFrom(b.getBlockHeader);
-                        BlockProcessor.offerMessage(new SyncApplyBlock(block));
+                        log.info("sync headertxs=" + block.getHeader.getTxHashsCount + " bodytxs=" + block.getBody().getTxsCount()+",blockheight="+block.getHeader.getNumber
+                           +","+BlockProcessor.getQueue.size())
+                        syncBlockInQueue.incrementAndGet();
+                        BlockProcessor.offerSyncBlock(new SyncApplyBlock(block));
                       }
                     }
                   }
@@ -96,14 +129,14 @@ object BlockSync extends SingletonWorkShop[SyncInfo] with PMNodeHelper with BitM
                     log.warn("error In SyncBlock:" + t.getMessage, t);
                 } finally {
                   //try gossip againt
-                  BeaconGossip.gossipBlocks();
+                   BeaconGossip.tryGossip(); 
                 }
               }
               def onFailed(e: java.lang.Exception, fp: FramePacket) {
                 val end = System.currentTimeMillis();
                 MDCSetBCUID(VCtrl.network());
                 MDCSetMessageID(messageid)
-                log.error("send SYNDOB ERROR :to " + randn.bcuid + ",cost=" + (end - start) + ",s=" + syncInfo + ",uri=" + randn.uri + ",e=" + e.getMessage, e)
+                log.error("send SYNVRF ERROR :to " + randn.bcuid + ",cost=" + (end - start) + ",s=" + syncInfo + ",uri=" + randn.uri + ",e=" + e.getMessage, e)
                 BeaconGossip.gossipBlocks();
               }
             })

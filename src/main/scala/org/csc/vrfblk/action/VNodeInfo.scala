@@ -43,6 +43,7 @@ object VNodeInfoService extends LogHelper with PBUtils with LService[PSNodeInfo]
 
     var ret = PRetNodeInfo.newBuilder();
     val network = networkByID("vrf")
+    // if (network == null) {
     if (network == null) {
       ret.setRetCode(-1).setRetMessage("unknow network:")
       handler.onFinished(PacketHelper.toPBReturn(pack, ret.build()))
@@ -55,16 +56,23 @@ object VNodeInfoService extends LogHelper with PBUtils with LService[PSNodeInfo]
         ret.setVn(VCtrl.curVN())
         MDCSetMessageID(pbo.getMessageId);
         if (StringUtils.isBlank(pack.getFrom())) {
-
         } else {
-          log.debug("getNodeInfo::" + pack.getFrom() + ",blockheight=" + pbo.getVn.getCurBlock + ",remotestate=" + pbo.getVn.getState
-            + ",curheight=" + VCtrl.curVN().getCurBlock + ",curstate=" + VCtrl.curVN().getState + ",DN=" + network.directNodes.size + ",MN=" + VCtrl.coMinerByUID.size)
+          log.info("getNodeInfo::" + pack.getFrom() 
+            + ",blockheight=" + pbo.getVn.getCurBlock 
+            + ",remotestate=" + pbo.getVn.getState
+            + ",curheight=" + VCtrl.curVN().getCurBlock 
+            + ",curstate=" + VCtrl.curVN().getState 
+            + ",DN=" + network.directNodes.size 
+            + ",MN=" + VCtrl.coMinerByUID.size 
+            + ",msgid=" + pbo.getMessageId
+            + ",cbr=" + BeaconGossip.currentBR.messageId
+            + ",bcuid=" + network.root.bcuid)
           if (StringUtils.equals(pack.getFrom(), network.root.bcuid) || StringUtils.equals(pbo.getMessageId, BeaconGossip.currentBR.messageId)) {
             // 如果消息是自己发的
             if (network.nodeByBcuid(pack.getFrom()) != network.noneNode && StringUtils.isNotBlank(pbo.getVn.getBcuid)) {
               val self = pbo.getVn
 
-              if (self.getDoMine) {
+              if (StringUtils.equals(pack.getFrom(), network.root.bcuid) && self.getDoMine) {
                 VCtrl.coMinerByUID.put(self.getBcuid, self);
               }
               // log.debug("current cominer::" + VCtrl.coMinerByUID);
@@ -127,13 +135,16 @@ object VNodeInfoService extends LogHelper with PBUtils with LService[PSNodeInfo]
             }
           } else {
             // 其它节点
-            // 返回自己的信息
+            // 返回自己的信息网络中节点查询: (DN -> PN -> None)
             network.nodeByBcuid(pack.getFrom()) match {
-              case network.noneNode =>
+              case network.noneNode => {
+                //log.info("nonenode=" + pack.getFrom() + " msgid=" + pbo.getMessageId)
+              }
               case n: PNode =>
                 if (pbo.getVn.getCurBlock >= VCtrl.curVN().getCurBlock - VConfig.BLOCK_DISTANCE_COMINE && StringUtils.isNotBlank(pbo.getVn.getBcuid)) {
                   // 成为打快节点
                   //log.debug("add cominer:" + pbo.getVn.getBcuid + ",blockheight=" + pbo.getVn.getCurBlock + ",cur=" + VCtrl.curVN().getCurBlock);
+
                   val friendNode = pbo.getVn
                   if (friendNode.getDoMine) {
                     VCtrl.coMinerByUID.put(friendNode.getBcuid, friendNode);
@@ -168,16 +179,21 @@ object VNodeInfoService extends LogHelper with PBUtils with LService[PSNodeInfo]
                     }
                   }
                 }
+                // log.info("pbo=" + pbo + " msgid=" + pbo.getMessageId);
                 if (pbo.getIsQuery) {
                   psret.setIsQuery(false);
                   network.postMessage("INFVRF", Left(psret.build()), pbo.getMessageId, n._bcuid);
                 }
               case _ =>
+              {
+                log.info("unknown node");
+              }
             }
           }
         }
       } catch {
         case e: FBSException => {
+          log.error("error:", e);
           ret.clear()
           ret.setRetCode(-2).setRetMessage(e.getMessage)
         }
